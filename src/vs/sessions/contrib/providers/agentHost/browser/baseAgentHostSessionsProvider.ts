@@ -1782,14 +1782,20 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 	private _handleModelChanged(session: string, model: ModelSelection): void {
 		const rawId = AgentSession.id(session);
 		const cached = this._sessionCache.get(rawId);
-		if (cached) {
-			cached.modelSelection = model;
-		}
-		const modelId = cached ? `${cached.resource.scheme}:${model.id}` : undefined;
-		if (cached && cached.modelId.get() !== modelId) {
-			cached.modelId.set(modelId, undefined);
+		if (cached && this._updateCachedModel(cached, model)) {
 			this._onDidChangeSessions.fire({ added: [], removed: [], changed: [cached] });
 		}
+	}
+
+	private _updateCachedModel(cached: AgentHostSessionAdapter, model: ModelSelection | undefined): boolean {
+		const didModelSelectionChange = cached.modelSelection?.id !== model?.id || !equals(cached.modelSelection?.config, model?.config);
+		cached.modelSelection = model;
+		const modelId = model ? `${cached.resource.scheme}:${model.id}` : undefined;
+		if (cached.modelId.get() !== modelId) {
+			cached.modelId.set(modelId, undefined);
+			return true;
+		}
+		return didModelSelectionChange;
 	}
 
 	private _handleIsArchivedChanged(session: string, isArchived: boolean): void {
@@ -1844,6 +1850,10 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 				cached.changes.set(diffsToChanges(changes.diffs, mapUri), undefined);
 				didChange = true;
 			}
+		}
+
+		if (Object.prototype.hasOwnProperty.call(changes, 'model') && this._updateCachedModel(cached, changes.model)) {
+			didChange = true;
 		}
 
 		if (Object.prototype.hasOwnProperty.call(changes, 'activity') && cached.setActivity(changes.activity)) {
