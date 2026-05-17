@@ -459,6 +459,12 @@ class NewSession extends Disposable {
 	private _connection: IAgentConnection | undefined;
 	/** Held state subscription. Set after the wire `createSession` resolves. */
 	private _subscription: IReference<unknown> | undefined;
+	/**
+	 * Model selection pending dispatch to the eager backend session. Set when
+	 * {@link setSelectedModelId} is called before {@link eagerCreate} finishes,
+	 * or updated when called after. Cleared after the dispatch is sent.
+	 */
+	private _pendingModelSelection: ModelSelection | undefined;
 
 	private readonly _logService: ILogService;
 	private readonly _providerId: string;
@@ -535,9 +541,33 @@ class NewSession extends Disposable {
 
 	// -- Picker mutations ----------------------------------------------------
 
-	setSelectedModelId(modelId: string): void {
+	setSelectedModelId(modelId: string, modelSelection?: ModelSelection): void {
 		this._selectedModelId = modelId;
 		this._modelId.set(modelId, undefined);
+
+		// If the eager backend session has already been created, dispatch the
+		// model change immediately so the backend summary reflects the correct
+		// model before the first turn starts, preventing the transient flicker
+		// to the default model (Claude Sonnet 4.6 Medium).
+		if (modelSelection) {
+			this._pendingModelSelection = modelSelection;
+			// Only dispatch once createSession() has resolved (_subscription is
+			// the sentinel — it is set only after the wire round-trip completes).
+			if (this._subscription && this._connection && this._backendUri) {
+				this._flushModelToBackend(this._connection, this._backendUri);
+			}
+		}
+	}
+
+	/** Dispatch a `SessionModelChanged` action to the already-created eager backend session. */
+	private _flushModelToBackend(connection: IAgentConnection, backendUri: URI): void {
+		const modelSelection = this._pendingModelSelection;
+		if (!modelSelection) {
+			return;
+		}
+		this._pendingModelSelection = undefined;
+		const action = { type: ActionType.SessionModelChanged as const, session: backendUri.toString(), model: modelSelection };
+		connection.dispatch(action);
 	}
 
 	getSelectedModelId(): string | undefined { return this._selectedModelId; }
@@ -661,6 +691,12 @@ class NewSession extends Disposable {
 			// when chat content opens, so when we release this ref on
 			// graduation the wire-level refcount stays positive.
 			this._subscription = connection.getSubscription(StateComponents.Session, backendUri);
+
+			// If the picker already selected a model before eager create
+			// finished, dispatch it now so the backend summary shows the
+			// correct model from the start, preventing the transient flicker
+			// to the default model.
+			this._flushModelToBackend(connection, backendUri);
 		})();
 	}
 
@@ -1260,7 +1296,13 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 
 	setModel(sessionId: string, modelId: string): void {
 		if (this._newSession?.sessionId === sessionId) {
-			this._newSession.setSelectedModelId(modelId);
+			// Build the ModelSelection so NewSession can dispatch it to the
+			// eager backend session immediately (prevents the transient flicker
+			// to the default model before the first turn starts).
+			const resourceScheme = this._newSession.session.resource.scheme;
+			const rawModelId = modelId.startsWith(`${resourceScheme}:`) ? modelId.substring(resourceScheme.length + 1) : modelId;
+			const modelSelection: ModelSelection = { id: rawModelId };
+			this._newSession.setSelectedModelId(modelId, modelSelection);
 			return;
 		}
 

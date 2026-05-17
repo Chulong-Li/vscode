@@ -631,6 +631,48 @@ suite('LocalAgentHostSessionsProvider', () => {
 		});
 	});
 
+	test('setModel on new session before eager create completes queues model and dispatches after createSession resolves', async () => {
+		const provider = createProvider(disposables, agentHost);
+		const workspaceUri = URI.parse('file:///home/user/project');
+		const session = provider.createNewSession(workspaceUri, provider.sessionTypes[0].id);
+
+		// Set model before the eager createSession round-trip resolves
+		provider.setModel(session.sessionId, 'agent-host-copilotcli:gpt-5-5-xhigh');
+
+		// No dispatch yet — backend session hasn't been created
+		assert.strictEqual(agentHost.dispatchedActions.length, 0, 'no dispatch before eager create completes');
+
+		await timeout(0); // let eager createSession resolve
+
+		const rawId = session.resource.path.substring(1);
+		const expectedBackendUri = AgentSession.uri(provider.sessionTypes[0].id, rawId);
+
+		assert.deepStrictEqual(agentHost.dispatchedActions.at(-1)?.action, {
+			type: ActionType.SessionModelChanged,
+			session: expectedBackendUri.toString(),
+			model: { id: 'gpt-5-5-xhigh' },
+		}, 'queued model should be dispatched once eager create completes');
+	});
+
+	test('setModel on new session after eager create completes dispatches immediately', async () => {
+		const provider = createProvider(disposables, agentHost);
+		const workspaceUri = URI.parse('file:///home/user/project');
+		const session = provider.createNewSession(workspaceUri, provider.sessionTypes[0].id);
+
+		await timeout(0); // let eager createSession resolve first
+
+		const rawId = session.resource.path.substring(1);
+		const expectedBackendUri = AgentSession.uri(provider.sessionTypes[0].id, rawId);
+
+		provider.setModel(session.sessionId, 'agent-host-copilotcli:gpt-5-5-xhigh');
+
+		assert.deepStrictEqual(agentHost.dispatchedActions.at(-1)?.action, {
+			type: ActionType.SessionModelChanged,
+			session: expectedBackendUri.toString(),
+			model: { id: 'gpt-5-5-xhigh' },
+		}, 'model should be dispatched immediately when eager create has already completed');
+	});
+
 	// ---- Session lifecycle -------
 
 	test('createNewSession returns session with correct fields', () => {
