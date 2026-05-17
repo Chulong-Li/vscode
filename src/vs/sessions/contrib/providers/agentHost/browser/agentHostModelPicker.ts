@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { BaseActionViewItem } from '../../../../../base/browser/ui/actionbar/actionViewItems.js';
-import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { autorun, observableValue } from '../../../../../base/common/observable.js';
 import * as nls from '../../../../../nls.js';
 import { IActionViewItemService } from '../../../../../platform/actions/browser/actionViewItemService.js';
@@ -97,6 +97,134 @@ export function resolveAgentHostModel(
 	return storedModelId ? models.find(model => model.identifier === storedModelId) : undefined;
 }
 
+export class AgentHostSessionModelPicker extends Disposable {
+
+	private readonly _currentModel = observableValue<ILanguageModelChatMetadataAndIdentifier | undefined>(this, undefined);
+	private readonly _delegate: IModelPickerDelegate;
+	private readonly _modelPicker: ModelPickerActionItem;
+	private _lastResourceScheme: string | undefined;
+	private _lastPushedSessionId: string | undefined;
+	private _settingModelInternally = false;
+
+	constructor(
+		@IInstantiationService instantiationService: IInstantiationService,
+		@ILanguageModelsService private readonly _languageModelsService: ILanguageModelsService,
+		@ISessionsManagementService private readonly _sessionsManagementService: ISessionsManagementService,
+		@ISessionsProvidersService private readonly _sessionsProvidersService: ISessionsProvidersService,
+		@IStorageService private readonly _storageService: IStorageService,
+		@ITelemetryService private readonly _telemetryService: ITelemetryService,
+	) {
+		super();
+
+		this._delegate = {
+			currentModel: this._currentModel,
+			setModel: (model: ILanguageModelChatMetadataAndIdentifier) => {
+				const previousModel = this._currentModel.get();
+				this._currentModel.set(model, undefined);
+				const session = this._sessionsManagementService.activeSession.get();
+				if (session) {
+					this._storageService.store(agentHostModelPickerStorageKey(session.resource.scheme), model.identifier, StorageScope.PROFILE, StorageTarget.MACHINE);
+					const provider = this._sessionsProvidersService.getProviders().find(p => p.id === session.providerId);
+					provider?.setModel(session.sessionId, model.identifier);
+				}
+				if (!this._settingModelInternally) {
+					reportNewChatPickerClosed(this._telemetryService, {
+						id: 'NewChatAgentHostModelPicker',
+						optionIdBefore: previousModel?.identifier,
+						optionIdAfter: model.identifier,
+						optionLabelBefore: previousModel?.metadata.name,
+						optionLabelAfter: model.metadata.name,
+						isPII: false,
+					});
+				}
+			},
+			getModels: () => getAgentHostModels(this._languageModelsService, this._sessionsManagementService.activeSession.get()),
+			useGroupedModelPicker: () => true,
+			showManageModelsAction: () => false,
+			showUnavailableFeatured: () => false,
+			showFeatured: () => true,
+		};
+		const pickerOptions: IChatInputPickerOptions = {
+			hideChevrons: observableValue('hideChevrons', false),
+		};
+		const action = { id: 'sessions.agentHost.modelPicker', label: '', enabled: true, class: undefined, tooltip: '', run: () => { } };
+		this._modelPicker = this._register(instantiationService.createInstance(ModelPickerActionItem, action, this._delegate, pickerOptions));
+
+		this._initModel();
+		this._register(this._languageModelsService.onDidChangeLanguageModels(() => this._initModel()));
+
+		this._register(autorun(reader => {
+			const session = this._sessionsManagementService.activeSession.read(reader);
+			if (session) {
+				session.modelId.read(reader);
+				session.status.read(reader);
+			}
+			this._initModel();
+		}));
+	}
+
+	private _initModel(): void {
+		const session = this._sessionsManagementService.activeSession.get();
+		const resourceScheme = session?.resource.scheme;
+
+		if (resourceScheme !== this._lastResourceScheme) {
+			this._currentModel.set(undefined, undefined);
+			this._lastResourceScheme = resourceScheme;
+			this._lastPushedSessionId = undefined;
+		}
+
+		const models = getAgentHostModels(this._languageModelsService, session);
+		this._modelPicker.setEnabled(models.length > 0);
+
+		if (!session || models.length === 0) {
+			this._currentModel.set(undefined, undefined);
+			return;
+		}
+
+		const sessionModelId = session.modelId.get();
+		const sessionModel = sessionModelId ? models.find(model => model.identifier === sessionModelId) : undefined;
+		const isUntitled = session.status.get() === SessionStatus.Untitled;
+
+		this._settingModelInternally = true;
+		try {
+			if (!isUntitled) {
+				this._currentModel.set(sessionModel, undefined);
+				this._lastPushedSessionId = session.sessionId;
+				return;
+			}
+
+			if (sessionModel) {
+				this._currentModel.set(sessionModel, undefined);
+				this._lastPushedSessionId = session.sessionId;
+				return;
+			}
+
+			const current = this._currentModel.get();
+			if (current && models.some(model => model.identifier === current.identifier)) {
+				if (session.sessionId !== this._lastPushedSessionId) {
+					this._delegate.setModel(current);
+					this._lastPushedSessionId = session.sessionId;
+				}
+				return;
+			}
+
+			const storedModelId = this._storageService.get(agentHostModelPickerStorageKey(session.resource.scheme), StorageScope.PROFILE);
+			const storedModel = resolveAgentHostModel(models, undefined, storedModelId);
+			this._currentModel.set(storedModel, undefined);
+			if (storedModel && session.sessionId !== this._lastPushedSessionId) {
+				this._delegate.setModel(storedModel);
+				this._lastPushedSessionId = session.sessionId;
+			}
+		} finally {
+			this._settingModelInternally = false;
+		}
+	}
+
+	render(container: HTMLElement): void {
+		this._modelPicker.render(container);
+	}
+}
+
 class AgentHostModelPickerContribution extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'sessions.contrib.agentHostModelPicker';
@@ -104,104 +232,22 @@ class AgentHostModelPickerContribution extends Disposable implements IWorkbenchC
 	constructor(
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
 		@IInstantiationService instantiationService: IInstantiationService,
-		@ILanguageModelsService languageModelsService: ILanguageModelsService,
-		@ISessionsManagementService sessionsManagementService: ISessionsManagementService,
-		@ISessionsProvidersService sessionsProvidersService: ISessionsProvidersService,
-		@IStorageService storageService: IStorageService,
-		@ITelemetryService telemetryService: ITelemetryService,
 	) {
 		super();
 
 		this._register(actionViewItemService.register(
 			Menus.NewSessionConfig, 'sessions.agentHost.modelPicker',
 			() => {
-				const currentModel = observableValue<ILanguageModelChatMetadataAndIdentifier | undefined>('currentModel', undefined);
-				let settingModelInternally = false;
-				const delegate: IModelPickerDelegate = {
-					currentModel,
-					setModel: (model: ILanguageModelChatMetadataAndIdentifier) => {
-						const previousModel = currentModel.get();
-						currentModel.set(model, undefined);
-						const session = sessionsManagementService.activeSession.get();
-						if (session) {
-							storageService.store(agentHostModelPickerStorageKey(session.resource.scheme), model.identifier, StorageScope.PROFILE, StorageTarget.MACHINE);
-							const provider = sessionsProvidersService.getProviders().find(p => p.id === session.providerId);
-							provider?.setModel(session.sessionId, model.identifier);
-						}
-						if (!settingModelInternally) {
-							reportNewChatPickerClosed(telemetryService, {
-								id: 'NewChatAgentHostModelPicker',
-								optionIdBefore: previousModel?.identifier,
-								optionIdAfter: model.identifier,
-								optionLabelBefore: previousModel?.metadata.name,
-								optionLabelAfter: model.metadata.name,
-								isPII: false,
-							});
-						}
-					},
-					getModels: () => getAgentHostModels(languageModelsService, sessionsManagementService.activeSession.get()),
-					useGroupedModelPicker: () => true,
-					showManageModelsAction: () => false,
-					showUnavailableFeatured: () => false,
-					showFeatured: () => true,
-				};
-				const pickerOptions: IChatInputPickerOptions = {
-					hideChevrons: observableValue('hideChevrons', false),
-				};
-				const action = { id: 'sessions.agentHost.modelPicker', label: '', enabled: true, class: undefined, tooltip: '', run: () => { } };
-				const modelPicker = instantiationService.createInstance(ModelPickerActionItem, action, delegate, pickerOptions);
-
-				const initModel = (session: ISession | undefined, sessionModelId: string | undefined, isUntitled: boolean) => {
-					const models = getAgentHostModels(languageModelsService, session);
-					modelPicker.setEnabled(models.length > 0);
-
-					if (!session || models.length === 0) {
-						currentModel.set(undefined, undefined);
-						return;
-					}
-
-					const storedModelId = isUntitled
-						? storageService.get(agentHostModelPickerStorageKey(session.resource.scheme), StorageScope.PROFILE)
-						: undefined;
-					const resolvedModel = resolveAgentHostModel(models, sessionModelId, storedModelId);
-					currentModel.set(resolvedModel, undefined);
-					if (!sessionModelId && isUntitled && resolvedModel) {
-						settingModelInternally = true;
-						try {
-							delegate.setModel(resolvedModel);
-						} finally {
-							settingModelInternally = false;
-						}
-					}
-				};
-				const initModelFromActiveSession = () => {
-					const session = sessionsManagementService.activeSession.get();
-					initModel(session, session?.modelId.get(), session?.status.get() === SessionStatus.Untitled);
-				};
-				initModelFromActiveSession();
-
-				const disposableStore = new DisposableStore();
-				disposableStore.add(languageModelsService.onDidChangeLanguageModels(() => initModelFromActiveSession()));
-
-				disposableStore.add(autorun(reader => {
-					const session = sessionsManagementService.activeSession.read(reader);
-					const sessionModelId = session?.modelId.read(reader);
-					const isUntitled = session?.status.read(reader) === SessionStatus.Untitled;
-					initModel(session, sessionModelId, isUntitled);
-				}));
-
-				return new AgentHostPickerActionViewItem(modelPicker, disposableStore);
+				const modelPicker = instantiationService.createInstance(AgentHostSessionModelPicker);
+				return new AgentHostPickerActionViewItem(modelPicker);
 			},
 		));
 	}
 }
 
 class AgentHostPickerActionViewItem extends BaseActionViewItem {
-	constructor(private readonly picker: { render(container: HTMLElement): void; dispose(): void }, disposable?: DisposableStore) {
+	constructor(private readonly picker: { render(container: HTMLElement): void; dispose(): void }) {
 		super(undefined, { id: '', label: '', enabled: true, class: undefined, tooltip: '', run: () => { } });
-		if (disposable) {
-			this._register(disposable);
-		}
 	}
 
 	override render(container: HTMLElement): void {
