@@ -35,6 +35,7 @@ import { ILogService, NullLogService } from '../../../log/common/log.js';
 import { IProductService } from '../../../product/common/productService.js';
 import { FileService } from '../../../files/common/fileService.js';
 import { IAgentMaterializeSessionEvent, AgentSession, AgentSignal, GITHUB_COPILOT_PROTECTED_RESOURCE } from '../../common/agentService.js';
+import { AgentFeedbackAttachmentDisplayKind } from '../../common/agentFeedbackAttachments.js';
 import { ActionType } from '../../common/state/sessionActions.js';
 import { MessageAttachmentKind, ResponsePartKind, SessionInputResponseKind, SessionStatus } from '../../common/state/sessionState.js';
 import { ISessionDataService } from '../../common/sessionDataService.js';
@@ -2093,6 +2094,23 @@ suite('ClaudeAgent', () => {
 		assert.ok(!blocks[1].text.includes('```'));
 	});
 
+	test('simple attachments use their model representation as context', () => {
+		const blocks = resolvePromptToContentBlocks('/act-on-feedback', [{
+			type: MessageAttachmentKind.Simple,
+			label: 'Feedback',
+			displayKind: AgentFeedbackAttachmentDisplayKind,
+			modelRepresentation: 'Feedback text for the model',
+		}]);
+
+		assert.deepStrictEqual(blocks, [
+			{ type: 'text', text: '/act-on-feedback' },
+			{
+				type: 'text',
+				text: 'Feedback text for the model',
+			},
+		]);
+	});
+
 	test('shutdown resolves without throwing', async () => {
 		const { agent } = createTestContext(disposables);
 		await agent.shutdown();
@@ -2792,6 +2810,19 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
+	test('onClientToolCallComplete is a benign no-op (Phase 10 not yet implemented)', () => {
+		// `AgentSideEffects` fires `onClientToolCallComplete` for every
+		// server-dispatched `SessionToolCallComplete` envelope, including
+		// the ones the Claude mapper emits for normal SDK tool completions.
+		// Until Phase 10 wires client (MCP) tools through, the body must
+		// be a benign no-op — throwing here corrupts every tool flow.
+		const { agent } = createTestContext(disposables);
+		const session = URI.parse('claude:/sess-1');
+		assert.doesNotThrow(() => {
+			agent.onClientToolCallComplete(session, 'toolu_unknown', { success: true, pastTenseMessage: 'ran' });
+		});
+	});
+
 	// #endregion
 });
 
@@ -2961,8 +2992,8 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 				toolCallId: 'tu_shape',
 				toolName: 'Read',
 				displayName: 'Read file',
-				invocationMessage: 'Read file',
-				toolInput: '{"file_path":"/tmp/foo.txt"}',
+				invocationMessage: { markdown: 'Reading [foo.txt](file:///tmp/foo.txt)' },
+				toolInput: '{\n  "file_path": "/tmp/foo.txt"\n}',
 				confirmationTitle: 'Read file?',
 			},
 			permissionKind: 'read',
@@ -4026,8 +4057,6 @@ suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
 });
 
 // #endregion
-
-
 
 
 
