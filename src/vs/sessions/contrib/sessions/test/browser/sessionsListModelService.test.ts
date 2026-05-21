@@ -319,6 +319,39 @@ suite('SessionsListModelService', () => {
 		]);
 	});
 
+	test('migrates state when session is replaced', () => {
+		const from = createSession('from');
+		const to = createSession('to');
+		service.pinSession(from);
+		service.markRead(from);
+
+		const events: ISessionListModelChangeEvent[] = [];
+		disposables.add(service.onDidChange(e => events.push(e)));
+
+		sessionsChangedEmitter.fire({ added: [], removed: [from], changed: [to], replaced: [{ from, to }] });
+
+		assert.deepStrictEqual({
+			fromPinned: service.isSessionPinned(from),
+			toPinned: service.isSessionPinned(to),
+			fromRead: service.isSessionRead(from),
+			toRead: service.isSessionRead(to),
+			events,
+		}, {
+			fromPinned: false,
+			toPinned: true,
+			fromRead: false,
+			toRead: true,
+			events: [{
+				changes: [
+					{ sessionId: 'from', kind: SessionListModelChangeKind.Pinned },
+					{ sessionId: 'to', kind: SessionListModelChangeKind.Pinned },
+					{ sessionId: 'from', kind: SessionListModelChangeKind.Read },
+					{ sessionId: 'to', kind: SessionListModelChangeKind.Read },
+				]
+			}],
+		});
+	});
+
 	test('removal does not fire when session has no state', () => {
 		const session = createSession('s1');
 		let changeCount = 0;

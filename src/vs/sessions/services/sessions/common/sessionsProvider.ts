@@ -10,12 +10,22 @@ import { IChatRequestVariableEntry } from '../../../../workbench/contrib/chat/co
 import { IChat, ISession, ISessionAgentRef, ISessionType, ISessionWorkspace, ISessionWorkspaceBrowseAction } from './session.js';
 
 /**
+ * Describes a temporary session being atomically replaced by its committed
+ * session.
+ */
+export interface ISessionReplacement {
+	readonly from: ISession;
+	readonly to: ISession;
+}
+
+/**
  * Event fired when sessions change within a provider.
  */
 export interface ISessionChangeEvent {
 	readonly added: readonly ISession[];
 	readonly removed: readonly ISession[];
 	readonly changed: readonly ISession[];
+	readonly replaced?: readonly ISessionReplacement[];
 }
 
 /**

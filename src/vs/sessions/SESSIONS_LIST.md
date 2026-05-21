@@ -83,13 +83,14 @@ A built-in find widget filters the list by session title and section label. When
 
 ### Pinning
 
-Pinned sessions appear in a dedicated "Pinned" section at the top. Pin state is managed by `ISessionsListModelService` and persisted locally (not synced to providers).
+Pinned sessions appear in a dedicated "Pinned" section at the top. Pin state is managed by `ISessionsListModelService` and persisted locally (not synced to providers). When a temporary new session is replaced by its committed session, pin state migrates to the committed session ID.
 
 ### Read / Unread
 
 - Sessions start as **unread**
 - A session becomes **read** when the user opens it or explicitly marks it
 - A session becomes **unread** when it completes in the background (transitions from InProgress to a terminal status while not active)
+- Temporary-to-committed session replacement preserves read state on the committed session ID
 
 ### Navigation
 

@@ -154,7 +154,7 @@ Backend state change (turn complete, status update, etc.)
   → UI re-renders via observable subscriptions
 ```
 
-Providers may fire `onDidReplaceSession` when a temporary (untitled) session is atomically replaced by a committed one after the first turn.
+Providers may fire `onDidReplaceSession` when a temporary (untitled) session is atomically replaced by a committed one after the first turn. The management service forwards this as a session change with a `replaced` mapping in addition to the usual `removed`/`changed` entries so UI-only state can migrate from the temporary session ID to the committed session ID.
 
 ---
 

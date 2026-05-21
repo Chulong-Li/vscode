@@ -10,7 +10,7 @@ import { localize } from '../../../../nls.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IChat, ISession, ISessionType, ISessionWorkspace } from './session.js';
-import { ISendRequestOptions } from './sessionsProvider.js';
+import { ISendRequestOptions, ISessionReplacement } from './sessionsProvider.js';
 
 /**
  * A (provider, session-type) pair returned by
@@ -50,6 +50,7 @@ export interface ISessionsChangeEvent {
 	readonly added: readonly ISession[];
 	readonly removed: readonly ISession[];
 	readonly changed: readonly ISession[];
+	readonly replaced?: readonly ISessionReplacement[];
 }
 
 /**

@@ -81,6 +81,10 @@ export class SessionsListModelService extends Disposable implements ISessionsLis
 		this._readSessionIds = this.loadSet(SessionsListModelService.READ_SESSIONS_KEY);
 
 		this._register(this.sessionsManagementService.onDidChangeSessions(e => {
+			for (const replacement of e.replaced ?? []) {
+				this.replaceSession(replacement.from, replacement.to);
+			}
+
 			for (const session of e.removed) {
 				this.deleteSession(session);
 			}
@@ -181,6 +185,39 @@ export class SessionsListModelService extends Disposable implements ISessionsLis
 	}
 
 	// -- Cleanup --
+
+	private replaceSession(from: ISession, to: ISession): void {
+		if (from.sessionId === to.sessionId) {
+			return;
+		}
+
+		const previousStatus = this._lastKnownStatus.get(from.sessionId);
+		this._lastKnownStatus.delete(from.sessionId);
+		if (previousStatus !== undefined) {
+			this._lastKnownStatus.set(to.sessionId, previousStatus);
+		}
+
+		const changes: { sessionId: string; kind: SessionListModelChangeKind }[] = [];
+		if (this._pinnedSessionIds.delete(from.sessionId)) {
+			this._pinnedSessionIds.add(to.sessionId);
+			this.saveSet(SessionsListModelService.PINNED_SESSIONS_KEY, this._pinnedSessionIds);
+			changes.push(
+				{ sessionId: from.sessionId, kind: SessionListModelChangeKind.Pinned },
+				{ sessionId: to.sessionId, kind: SessionListModelChangeKind.Pinned },
+			);
+		}
+		if (this._readSessionIds.delete(from.sessionId)) {
+			this._readSessionIds.add(to.sessionId);
+			this.saveSet(SessionsListModelService.READ_SESSIONS_KEY, this._readSessionIds);
+			changes.push(
+				{ sessionId: from.sessionId, kind: SessionListModelChangeKind.Read },
+				{ sessionId: to.sessionId, kind: SessionListModelChangeKind.Read },
+			);
+		}
+		if (changes.length > 0) {
+			this._onDidChange.fire({ changes });
+		}
+	}
 
 	private deleteSession(session: ISession): void {
 		this._lastKnownStatus.delete(session.sessionId);

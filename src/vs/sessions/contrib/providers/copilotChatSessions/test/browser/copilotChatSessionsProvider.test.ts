@@ -1298,6 +1298,37 @@ suite('CopilotChatSessionsProvider', () => {
 			assert.strictEqual(provider.getSessions().length, 1, 'committed session should persist after stopping');
 		});
 
+		test('uses returned new session resource when commit event is absent', async () => {
+			const committedResource = URI.from({ scheme: AgentSessionProviders.Background, path: '/committed-from-result' });
+			const provider = createProviderForSendTests(disposables, model, async () => {
+				model.addSession(createMockAgentSession(committedResource));
+				return {
+					kind: 'sent' as const,
+					newSessionResource: committedResource,
+					data: {
+						responseCompletePromise: Promise.resolve(),
+						responseCreatedPromise: Promise.resolve({ isCanceled: false } as unknown as IChatResponseModel),
+						agent: new class extends mock<IChatAgentData>() { }(),
+					} as IChatSendRequestData,
+				};
+			});
+			const replacements: Array<{ from: string; to: string }> = [];
+			disposables.add(provider.onDidReplaceSession(e => replacements.push({ from: e.from.resource.toString(), to: e.to.resource.toString() })));
+
+			const newSession = provider.createNewSession(workspace, CopilotCLISessionType.id);
+			const updatedSession = await provider.sendAndCreateChat(newSession.sessionId, { query: 'test' });
+
+			assert.deepStrictEqual({
+				updatedResource: updatedSession.resource.toString(),
+				sessions: provider.getSessions().map(session => session.resource.toString()),
+				replacements,
+			}, {
+				updatedResource: committedResource.toString(),
+				sessions: [committedResource.toString()],
+				replacements: [{ from: newSession.resource.toString(), to: committedResource.toString() }],
+			});
+		});
+
 		test('cancelling the request before commit keeps the session with completed status', async () => {
 			const { provider, cancelRequest } = makeInFlightProvider();
 

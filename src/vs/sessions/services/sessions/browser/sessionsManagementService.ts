@@ -143,13 +143,15 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		if (this._activeSession.get()?.sessionId === from.sessionId) {
 			this.setActiveSession(to, /* force */ true);
 		}
+		const replaced = from.sessionId === to.sessionId ? undefined : [{ from, to }];
 		// Always fire the change event so the SessionsList refreshes even when
 		// the user navigated to a different session while the new one was
 		// being created (which is how duplicate rows appeared in the list).
 		this._onDidChangeSessions.fire({
 			added: [],
-			removed: from.sessionId === to.sessionId ? [] : [from],
+			removed: replaced ? [from] : [],
 			changed: [to],
+			replaced,
 		});
 	}
 
